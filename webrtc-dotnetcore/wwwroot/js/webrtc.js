@@ -13,38 +13,15 @@ const configuration = {
  };
 const peerConn = new RTCPeerConnection(configuration);
 
-const roomNameTxt = document.getElementById('roomNameTxt');
-const createRoomBtn = document.getElementById('createRoomBtn');
-const roomTable = document.getElementById('roomTable');
 const connectionStatusMessage = document.getElementById('connectionStatusMessage');
-const fileInput = document.getElementById('fileInput');
-const sendFileBtn = document.getElementById('sendFileBtn');
-const fileTable = document.getElementById('fileTable');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 
-let myRoomId;
 let localStream;
 let remoteStream;
-let fileReader;
 let isInitiator = false;
-let hasRoomJoined = false;
 
-fileInput.disabled = true;
-sendFileBtn.disabled = true;
 
-$(roomTable).DataTable({
-    columns: [
-        { data: 'RoomId', "width": "30%" },
-        { data: 'Name', "width": "50%" },
-        { data: 'Button', "width": "15%" }
-    ],
-    "lengthChange": false,
-    "searching": false,
-    "language": {
-        "emptyTable": "No room available"
-    }
-});
 
 //setup my video here.
 grabWebCamVideo();
@@ -56,42 +33,23 @@ grabWebCamVideo();
 // Connect to the signaling server
 connection.start().then(function () {
 
-    connection.on('updateRoom', function (data) {
-        var obj = JSON.parse(data);
-        $(roomTable).DataTable().clear().rows.add(obj).draw();
-    });
-
-    connection.on('created', function (roomId) {
-        console.log('Created room', roomId);
-        roomNameTxt.disabled = true;
-        createRoomBtn.disabled = true;
-        hasRoomJoined = true;
-        connectionStatusMessage.innerText = 'You created Room ' + roomId + '. Waiting for participants...';
-        myRoomId = roomId;
-        isInitiator = true;
-    });
-
-    connection.on('joined', function (roomId) {
-        console.log('This peer has joined room', roomId);
-        myRoomId = roomId;
-        isInitiator = false;
-    });
-
     connection.on('error', function (message) {
         alert(message);
     });
 
+    //This means Signal R is alive and ready to send/recieve stuff to other client
+    //Or maybe it means nothing...
     connection.on('ready', function () {
         console.log('Socket is ready');
-        roomNameTxt.disabled = true;
-        createRoomBtn.disabled = true;
-        hasRoomJoined = true;
         connectionStatusMessage.innerText = 'Connecting...';
         createPeerConnection(isInitiator, configuration);
     });
 
     connection.on('message', function (message) {
         console.log('Client received message:', message);
+
+        //This is important
+        //This is where message from other clients gets processed
         signalingMessageCallback(message);
     });
 
@@ -101,6 +59,8 @@ connection.start().then(function () {
         connectionStatusMessage.innerText = `Other peer left room ${myRoomId}.`;
     });
 
+
+    //Close browser
     window.addEventListener('unload', function () {
         if (hasRoomJoined) {
             console.log(`Unloading window. Notifying peers in ${myRoomId}.`);
@@ -110,10 +70,6 @@ connection.start().then(function () {
         }
     });
 
-    //Get room list.
-    connection.invoke("GetRoomInfo").catch(function (err) {
-        return console.error(err.toString());
-    });
 
 }).catch(function (err) {
     return console.error(err.toString());
@@ -124,46 +80,13 @@ connection.start().then(function () {
 */
 function sendMessage(message) {
     console.log('Client sending message: ', message);
-    connection.invoke("SendMessage", myRoomId, message).catch(function (err) {
+    connection.invoke("SendMessage", message).catch(function (err) {
         return console.error(err.toString());
     });
+    connection.invoke("Test");
 }
 
-/****************************************************************************
-* Room management
-****************************************************************************/
 
-$(createRoomBtn).click(function () {
-    var name = roomNameTxt.value;
-    connection.invoke("CreateRoom", name).catch(function (err) {
-        return console.error(err.toString());
-    });
-});
-
-$('#roomTable tbody').on('click', 'button', function () {
-    if (hasRoomJoined) {
-        alert('You already joined the room. Please use a new tab or window.');
-    } else {
-        var data = $(roomTable).DataTable().row($(this).parents('tr')).data();
-        connection.invoke("Join", data.RoomId).catch(function (err) {
-            return console.error(err.toString());
-        });
-    }
-});
-
-$(fileInput).change(function () {
-    let file = fileInput.files[0];
-    if (file) {
-        sendFileBtn.disabled = false;
-    } else {
-        sendFileBtn.disabled = true;
-    }
-});
-
-$(sendFileBtn).click(function () {
-    sendFileBtn.disabled = true;
-    sendFile();
-});
 
 /****************************************************************************
 * User media (webcam)
@@ -172,7 +95,7 @@ $(sendFileBtn).click(function () {
 function grabWebCamVideo() {
     console.log('Getting user media (video) ...');
     navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: false,
         video: true
     })
         .then(gotStream)
@@ -186,6 +109,8 @@ function gotStream(stream) {
     localStream = stream;
     peerConn.addStream(localStream);
     localVideo.srcObject = stream;
+    createPeerConnection(true, configuration);
+
 }
 
 /****************************************************************************
@@ -195,25 +120,26 @@ function gotStream(stream) {
 var dataChannel;
 
 function signalingMessageCallback(message) {
-    if (message.type === 'offer') {
+    if (message.type === 'offer' || message.type === 'Offer') {
         console.log('Got offer. Sending answer to peer.');
         peerConn.setRemoteDescription(new RTCSessionDescription(message), function () { },
             logError);
         peerConn.createAnswer(onLocalSessionCreated, logError);
 
-    } else if (message.type === 'answer') {
+    } else if (message.type === 'answer' || message.type === 'Answer') {
         console.log('Got answer.');
         peerConn.setRemoteDescription(new RTCSessionDescription(message), function () { },
             logError);
 
-    } else if (message.type === 'candidate') {
-        peerConn.addIceCandidate(new RTCIceCandidate({
-            candidate: message.candidate
-        }));
-
+    } else if (message.type === 'candidate' || message.type === 'Candidate') {
+        peerConn.addIceCandidate(message.candidate);
     }
 }
 
+//This is called once SignalR starts
+//It's about to start negotiations to send video
+//We don't really care about web sending video
+    //But some of this may be needed for receiving
 function createPeerConnection(isInitiator, config) {
     console.log('Creating Peer connection as initiator?', isInitiator, 'config:',
         config);
@@ -229,7 +155,9 @@ function createPeerConnection(isInitiator, config) {
             //    id: event.candidate.sdpMid,
             //    candidate: event.candidate.candidate
             //});
+            console.log("Ice candidate event has a candidate");
         } else {
+            console.log("Ice candidate event has NO candidate");
             console.log('End of candidates.');
             // Vanilla ICE
             sendMessage(peerConn.localDescription);
@@ -261,9 +189,12 @@ function onLocalSessionCreated(desc) {
     console.log('local session created:', desc);
     peerConn.setLocalDescription(desc, function () {
         // Trickle ICE
-        //console.log('sending local desc:', peerConn.localDescription);
-        //sendMessage(peerConn.localDescription);
-    }, logError);
+    }, logError).then(function () {
+        console.log('sending local desc:', peerConn.localDescription);
+
+        //local sessions created so send an offer out
+        sendMessage(peerConn.localDescription);
+    })
 }
 
 function onDataChannelCreated(channel) {
@@ -283,6 +214,9 @@ function onDataChannelCreated(channel) {
     channel.onmessage = onReceiveMessageCallback();
 }
 
+//Incoming message from Mobile
+//Might be text of might be a file stream
+//The file bytes here are for sharing files, not video stream
 function onReceiveMessageCallback() {
     let count;
     let fileSize, fileName;
