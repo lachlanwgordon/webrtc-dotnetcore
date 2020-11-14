@@ -36,7 +36,5 @@ namespace webrtc_dotnetcore.Hubs
         }
 
     }
-
-
    
 }

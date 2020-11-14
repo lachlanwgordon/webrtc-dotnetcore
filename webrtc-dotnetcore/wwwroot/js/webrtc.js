@@ -132,7 +132,8 @@ function signalingMessageCallback(message) {
             logError);
 
     } else if (message.type === 'candidate' || message.type === 'Candidate') {
-        peerConn.addIceCandidate(message.candidate);
+        var candidate = new RTCIceCandidate(message.candidate);
+        peerConn.addIceCandidate(candidate);
     }
 }
 
@@ -156,6 +157,8 @@ function createPeerConnection(isInitiator, config) {
             //    candidate: event.candidate.candidate
             //});
             console.log("Ice candidate event has a candidate");
+
+
         } else {
             console.log("Ice candidate event has NO candidate");
             console.log('End of candidates.');
